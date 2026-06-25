@@ -11,6 +11,8 @@ Rails.application.routes.draw do
 
   namespace :api do
     resources :vessels, only: :index
+    get "viewport" => "viewport#show", as: :viewport
+    post "viewport" => "viewport#update", as: :viewport_update
   end
 
   # Defines the root path route ("/")

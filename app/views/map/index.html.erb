@@ -31,11 +31,13 @@
     window.AIS_CONFIG = {
       center: { lat: <%= @map_center[:lat] %>, lng: <%= @map_center[:lng] %> },
       vesselsUrl: "<%= api_vessels_path(format: :json) %>",
+      viewportUrl: "<%= api_viewport_path %>",
       refreshMs: 5000
     };
 
     let aisMap;
     const aisMarkers = {};
+    let aisBoxes = [];
     const aisInfoWindow = () => (window.__aisInfo ||= new google.maps.InfoWindow());
 
     function initAisMap() {
@@ -44,8 +46,68 @@
         zoom: 10,
         mapTypeId: "roadmap"
       });
-      fetchVessels();
+      aisMap.addListener("idle", onMapIdle);
       setInterval(fetchVessels, window.AIS_CONFIG.refreshMs);
+      refreshBoundingBoxes();
+      setInterval(refreshBoundingBoxes, window.AIS_CONFIG.refreshMs);
+    }
+
+    async function refreshBoundingBoxes() {
+      try {
+        const res = await fetch(window.AIS_CONFIG.viewportUrl, { headers: { "Accept": "application/json" } });
+        if (!res.ok) return;
+        const data = await res.json();
+        renderBoundingBoxes(data.bounding_boxes || []);
+      } catch (e) {
+        /* ignore bounding box fetch failures */
+      }
+    }
+
+    function renderBoundingBoxes(boxes) {
+      aisBoxes.forEach((rect) => rect.setMap(null));
+      aisBoxes = boxes.map((box) => {
+        const [sw, ne] = box;
+        return new google.maps.Rectangle({
+          map: aisMap,
+          bounds: { south: sw[0], west: sw[1], north: ne[0], east: ne[1] },
+          strokeColor: "#e53935",
+          strokeOpacity: 0.9,
+          strokeWeight: 2,
+          fillOpacity: 0,
+          clickable: false,
+          zIndex: 1
+        });
+      });
+    }
+
+    function onMapIdle() {
+      reportViewport();
+      fetchVessels();
+    }
+
+    async function reportViewport() {
+      const bounds = aisMap && aisMap.getBounds();
+      if (!bounds) return;
+      const ne = bounds.getNorthEast();
+      const sw = bounds.getSouthWest();
+      const token = document.querySelector('meta[name="csrf-token"]');
+      try {
+        await fetch(window.AIS_CONFIG.viewportUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRF-Token": token ? token.content : ""
+          },
+          body: JSON.stringify({
+            north: ne.lat(),
+            south: sw.lat(),
+            east: ne.lng(),
+            west: sw.lng()
+          })
+        });
+      } catch (e) {
+        /* ignore viewport reporting failures */
+      }
     }
 
     function vesselIcon(vessel) {
@@ -78,10 +140,24 @@
       </div>`;
     }
 
+    function vesselsRequestUrl() {
+      const url = new URL(window.AIS_CONFIG.vesselsUrl, window.location.origin);
+      const bounds = aisMap && aisMap.getBounds();
+      if (bounds) {
+        const ne = bounds.getNorthEast();
+        const sw = bounds.getSouthWest();
+        url.searchParams.set("north", ne.lat());
+        url.searchParams.set("south", sw.lat());
+        url.searchParams.set("east", ne.lng());
+        url.searchParams.set("west", sw.lng());
+      }
+      return url.toString();
+    }
+
     async function fetchVessels() {
       const statusEl = document.getElementById("ais-status");
       try {
-        const res = await fetch(window.AIS_CONFIG.vesselsUrl, { headers: { "Accept": "application/json" } });
+        const res = await fetch(vesselsRequestUrl(), { headers: { "Accept": "application/json" } });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const vessels = await res.json();
         renderVessels(vessels);

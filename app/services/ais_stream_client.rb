@@ -15,12 +15,19 @@ class AisStreamClient
   DEFAULT_BOUNDING_BOXES = [[[35.0, 139.5], [35.7, 140.2]]].freeze
 
   RECONNECT_DELAY = 5 # seconds
+  VIEWPORT_POLL_INTERVAL = 3 # seconds
 
   def initialize(api_key: ENV["AISSTREAM_API_KEY"], bounding_boxes: self.class.configured_bounding_boxes, logger: Rails.logger)
     @api_key = api_key
-    @bounding_boxes = bounding_boxes
+    @fallback_bounding_boxes = bounding_boxes
     @logger = logger
     @message_count = 0
+  end
+
+  # The area to subscribe to: the live map viewport when available,
+  # otherwise the configured/default bounding boxes.
+  def desired_bounding_boxes
+    AisViewport.read || @fallback_bounding_boxes
   end
 
   def self.configured_bounding_boxes
@@ -41,6 +48,7 @@ class AisStreamClient
     end
 
     connect
+    start_viewport_watcher
   end
 
   private
@@ -48,6 +56,7 @@ class AisStreamClient
   def connect
     @logger.info("[AIS] Connecting to #{AIS_STREAM_URL} ...")
     ws = Faye::WebSocket::Client.new(AIS_STREAM_URL)
+    @ws = ws
 
     ws.on(:open) { |_event| handle_open(ws) }
     ws.on(:message) { |event| handle_message(event) }
@@ -56,13 +65,33 @@ class AisStreamClient
   end
 
   def handle_open(ws)
-    @logger.info("[AIS] Connected. Subscribing to bounding boxes: #{@bounding_boxes.inspect}")
+    subscribe(ws, desired_bounding_boxes)
+  end
+
+  def subscribe(ws, boxes)
+    @logger.info("[AIS] Subscribing to bounding boxes: #{boxes.inspect}")
     subscription = {
       APIKey: @api_key,
-      BoundingBoxes: @bounding_boxes,
+      BoundingBoxes: boxes,
       FilterMessageTypes: ["PositionReport"]
     }
     ws.send(subscription.to_json)
+    @subscribed_bounding_boxes = boxes
+  end
+
+  # Periodically check whether the displayed viewport changed and, if so,
+  # re-subscribe the existing connection to the new area.
+  def start_viewport_watcher
+    EM.add_periodic_timer(VIEWPORT_POLL_INTERVAL) do
+      boxes = desired_bounding_boxes
+      next if boxes == @subscribed_bounding_boxes
+      next unless @ws && @ws.ready_state == Faye::WebSocket::API::OPEN
+
+      @logger.info("[AIS] Viewport changed; updating subscription.")
+      subscribe(@ws, boxes)
+    rescue => e
+      @logger.error("[AIS] Failed to update subscription: #{e.class}: #{e.message}")
+    end
   end
 
   def handle_message(event)
