@@ -1,6 +1,8 @@
 class MapController < ApplicationController
   def index
     @google_maps_api_key = ENV["GOOGLE_MAPS_API_KEY"]
+    # AdvancedMarkerElement requires a Map ID. Falls back to Google's test ID.
+    @google_maps_map_id = ENV["GOOGLE_MAPS_MAP_ID"].presence || "DEMO_MAP_ID"
     @map_center = map_center
   end
 
