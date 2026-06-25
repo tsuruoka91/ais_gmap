@@ -1,0 +1,134 @@
+<% content_for :title, "AIS Ship Map" %>
+
+<div id="ais-app">
+  <div id="ais-toolbar">
+    <span class="ais-title">AIS Ship Map</span>
+    <span id="ais-status">Loading...</span>
+  </div>
+  <div id="ais-map"></div>
+</div>
+
+<style>
+  html, body { height: 100%; margin: 0; }
+  #ais-app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+  #ais-toolbar {
+    display: flex; align-items: center; gap: 16px;
+    padding: 10px 16px; background: #0b3d61; color: #fff;
+    font-family: system-ui, sans-serif;
+  }
+  #ais-toolbar .ais-title { font-weight: 700; font-size: 16px; }
+  #ais-status { font-size: 13px; opacity: 0.85; }
+  #ais-map { flex: 1 1 auto; }
+</style>
+
+<% if @google_maps_api_key.blank? %>
+  <script>
+    document.getElementById("ais-status").textContent =
+      "GOOGLE_MAPS_API_KEY が未設定です。.env に設定してください。";
+  </script>
+<% else %>
+  <script>
+    window.AIS_CONFIG = {
+      center: { lat: <%= @map_center[:lat] %>, lng: <%= @map_center[:lng] %> },
+      vesselsUrl: "<%= api_vessels_path(format: :json) %>",
+      refreshMs: 5000
+    };
+
+    let aisMap;
+    const aisMarkers = {};
+    const aisInfoWindow = () => (window.__aisInfo ||= new google.maps.InfoWindow());
+
+    function initAisMap() {
+      aisMap = new google.maps.Map(document.getElementById("ais-map"), {
+        center: window.AIS_CONFIG.center,
+        zoom: 10,
+        mapTypeId: "roadmap"
+      });
+      fetchVessels();
+      setInterval(fetchVessels, window.AIS_CONFIG.refreshMs);
+    }
+
+    function vesselIcon(vessel) {
+      const heading = (vessel.true_heading != null && vessel.true_heading !== 511)
+        ? vessel.true_heading
+        : (vessel.cog != null ? vessel.cog : 0);
+      return {
+        path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+        scale: 4.5,
+        rotation: heading,
+        fillColor: "#1565c0",
+        fillOpacity: 0.9,
+        strokeColor: "#ffffff",
+        strokeWeight: 1
+      };
+    }
+
+    function infoContent(v) {
+      const name = v.name && v.name.length ? v.name : "(不明)";
+      const sog = v.sog != null ? v.sog + " kn" : "-";
+      const cog = v.cog != null ? v.cog + "°" : "-";
+      const hdg = (v.true_heading != null && v.true_heading !== 511) ? v.true_heading + "°" : "-";
+      return `<div style="font-family:system-ui,sans-serif;font-size:13px;line-height:1.5">
+        <strong>${name}</strong><br>
+        MMSI: ${v.mmsi}<br>
+        速力(SOG): ${sog}<br>
+        針路(COG): ${cog}<br>
+        船首方位: ${hdg}<br>
+        更新: ${v.last_message_at || "-"}
+      </div>`;
+    }
+
+    async function fetchVessels() {
+      const statusEl = document.getElementById("ais-status");
+      try {
+        const res = await fetch(window.AIS_CONFIG.vesselsUrl, { headers: { "Accept": "application/json" } });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const vessels = await res.json();
+        renderVessels(vessels);
+        statusEl.textContent = `${vessels.length} 隻表示中 / 最終更新 ${new Date().toLocaleTimeString()}`;
+      } catch (e) {
+        statusEl.textContent = "データ取得に失敗しました: " + e.message;
+      }
+    }
+
+    function renderVessels(vessels) {
+      const seen = {};
+      vessels.forEach((v) => {
+        if (v.latitude == null || v.longitude == null) return;
+        seen[v.mmsi] = true;
+        const position = { lat: v.latitude, lng: v.longitude };
+        let marker = aisMarkers[v.mmsi];
+        if (!marker) {
+          marker = new google.maps.Marker({
+            map: aisMap,
+            position: position,
+            icon: vesselIcon(v),
+            title: v.name || String(v.mmsi)
+          });
+          marker.addListener("click", () => {
+            const iw = aisInfoWindow();
+            iw.setContent(infoContent(v));
+            iw.open(aisMap, marker);
+          });
+          aisMarkers[v.mmsi] = marker;
+        } else {
+          marker.setPosition(position);
+          marker.setIcon(vesselIcon(v));
+        }
+        marker.__vessel = v;
+      });
+
+      Object.keys(aisMarkers).forEach((mmsi) => {
+        if (!seen[mmsi]) {
+          aisMarkers[mmsi].setMap(null);
+          delete aisMarkers[mmsi];
+        }
+      });
+    }
+
+    window.initAisMap = initAisMap;
+  </script>
+  <script async
+    src="https://maps.googleapis.com/maps/api/js?key=<%= j @google_maps_api_key %>&callback=initAisMap&loading=async">
+  </script>
+<% end %>

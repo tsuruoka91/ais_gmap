@@ -1,0 +1,25 @@
+# Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
+
+one:
+  mmsi: 1
+  name: MyString
+  latitude: 1.5
+  longitude: 1.5
+  sog: 1.5
+  cog: 1.5
+  true_heading: 1
+  nav_status: 1
+  ship_type: 1
+  last_message_at: 2026-06-25 12:01:05
+
+two:
+  mmsi: 1
+  name: MyString
+  latitude: 1.5
+  longitude: 1.5
+  sog: 1.5
+  cog: 1.5
+  true_heading: 1
+  nav_status: 1
+  ship_type: 1
+  last_message_at: 2026-06-25 12:01:05
