@@ -36,6 +36,7 @@
     };
 
     let aisMap;
+    let aisClusterer;
     const aisMarkers = {};
     let aisBoxes = [];
     const aisInfoWindow = () => (window.__aisInfo ||= new google.maps.InfoWindow());
@@ -46,6 +47,7 @@
         zoom: 10,
         mapTypeId: "roadmap"
       });
+      aisClusterer = new markerClusterer.MarkerClusterer({ map: aisMap });
       aisMap.addListener("idle", onMapIdle);
       setInterval(fetchVessels, window.AIS_CONFIG.refreshMs);
       refreshBoundingBoxes();
@@ -169,6 +171,8 @@
 
     function renderVessels(vessels) {
       const seen = {};
+      const toAdd = [];
+      const toRemove = [];
       vessels.forEach((v) => {
         if (v.latitude == null || v.longitude == null) return;
         seen[v.mmsi] = true;
@@ -176,34 +180,46 @@
         let marker = aisMarkers[v.mmsi];
         if (!marker) {
           marker = new google.maps.Marker({
-            map: aisMap,
             position: position,
             icon: vesselIcon(v),
             title: v.name || String(v.mmsi)
           });
           marker.addListener("click", () => {
             const iw = aisInfoWindow();
-            iw.setContent(infoContent(v));
+            iw.setContent(infoContent(marker.__vessel));
             iw.open(aisMap, marker);
           });
           aisMarkers[v.mmsi] = marker;
+          toAdd.push(marker);
         } else {
-          marker.setPosition(position);
-          marker.setIcon(vesselIcon(v));
+          // Only touch the marker when its position or heading actually changed.
+          const prev = marker.__vessel || {};
+          if (prev.latitude !== v.latitude || prev.longitude !== v.longitude) {
+            marker.setPosition(position);
+          }
+          if (prev.true_heading !== v.true_heading || prev.cog !== v.cog) {
+            marker.setIcon(vesselIcon(v));
+          }
         }
         marker.__vessel = v;
       });
 
       Object.keys(aisMarkers).forEach((mmsi) => {
         if (!seen[mmsi]) {
-          aisMarkers[mmsi].setMap(null);
+          toRemove.push(aisMarkers[mmsi]);
           delete aisMarkers[mmsi];
         }
       });
+
+      if (toAdd.length) aisClusterer.addMarkers(toAdd, true);
+      if (toRemove.length) aisClusterer.removeMarkers(toRemove, true);
+      // Recluster once after the batch so moving vessels regroup without a map gesture.
+      aisClusterer.render();
     }
 
     window.initAisMap = initAisMap;
   </script>
+  <script src="https://unpkg.com/@googlemaps/markerclusterer/dist/index.min.js"></script>
   <script async
     src="https://maps.googleapis.com/maps/api/js?key=<%= j @google_maps_api_key %>&callback=initAisMap&loading=async">
   </script>
